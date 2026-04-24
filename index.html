@@ -175,6 +175,8 @@
                     <label>🟠 Groq API Key:</label><input type="password" id="groqKey" placeholder="gsk_..." />
                     <label>🔵 OpenRouter API Key:</label><input type="password" id="orKey" placeholder="sk-or-v1-..." />
                     <label>🖥️ Ollama URL (из Colab):</label><input type="text" id="ollamaUrl" placeholder="https://....trycloudflare.com" />
+                    <label>🎓 Gradio URL (из Colab):</label>
+                    <input type="text" id="gradioUrl" placeholder="https://....gradio.live" />
                     <div class="hint">Запусти Colab с cloudflared и вставь URL</div>
                     <button id="saveAPI">💾 Сохранить</button>
                     <div class="status" id="apiStatus"></div>
@@ -198,13 +200,7 @@
                     <span class="badge pat" id="patBadge">talk</span>
                     <select id="charSelect"></select>
                     <select id="modelSelect">
-                        <optgroup label="🖥️ Ollama (Colab)">
-                            <option value="ollama:qwen2.5:1.5b">Qwen 2.5 1.5</option>
-                            <option value="ollama:qwen2.5:7b">Qwen 2.5 7B</option>                            
-                            <option value="ollama:llama3.2:3b">Llama 3.2 3B</option>
-                            <option value="ollama:gemma2:9b">Gemma 2 9B</option>
-                            <option value="ollama:mistral:7b">Mistral 7B</option>
-                        </optgroup>
+
                         <optgroup label="🟠 Groq">
                             <option value="groq:qwen/qwen3-32b">Qwen3 32B</option>
                             <option value="groq:llama-3.3-70b-versatile">Llama 3.3 70B</option>
@@ -215,14 +211,22 @@
                             <option value="groq:groq/compound">Groq Compound</option>
                             <option value="groq:groq/compound-mini">Groq Compound Mini</option>
                         </optgroup>
-                        <optgroup label="🔵 OpenRouter (запас)">
+                        <optgroup label="🔵 OpenRouter">
                             <option value="or:inclusionai/ling-2.6-1t:free">Ling-2.6-1T</option>
                             <option value="or:inclusionai/ling-2.6-flash:free">Ling-2.6-Flash</option>
                             <option value="or:tencent/hy3-preview:free">Tencent Hy3</option>
                             <option value="or:google/gemma-4-26b-a4b-it:free">Gemma 4 26B</option>
                             <option value="or:google/gemma-4-31b-it:free">Gemma 4 31B</option>
                         </optgroup>
+                        <optgroup label="🎓 Gradio (Colab)">
+                            <option value="gradio:qwen2.5:1.5b">Gradio Chat</option>
+                        </optgroup>
+                        <optgroup label="🖥️ Ollama (Colab)">
+                            <option value="ollama:qwen2.5:1.5b">Qwen 2.5 1.5</option>
+                            <option value="ollama:llama3.2:3b">Llama 3.2 3B</option>
+                        </optgroup>
                     </select>
+                    
                 </div>
                 <div class="chat-body">
                     <div class="chat-main">
@@ -352,6 +356,9 @@
             } else if (mv.startsWith('groq:')) {
                 badge.textContent = 'Groq';
                 badge.className = 'badge gr';
+            } else if (mv.startsWith('gradio:')) {
+                badge.textContent = 'Gradio';
+                badge.className = 'badge ol';
             } else {
                 badge.textContent = 'OR';
                 badge.className = 'badge or';
@@ -439,9 +446,22 @@
         function buildPrompt() {
             const c = getActiveChar();
             if (!c) return null;
+            
             let base = '';
-            const langMap = { ru:'Русский', en:'English', de:'Deutsch', fr:'Français', es:'Español', jp:'日本語' };
-            base += `Язык: ${langMap[c.lang] || 'Русский'}. `;
+            
+            // Жёсткое указание языка
+            const langMap = { 
+                ru: 'Русский', en: 'English', de: 'Deutsch', fr: 'Français', 
+                es: 'Español', jp: '日本語' 
+            };
+            
+            // Системная инструкция по языку — самая первая и жирная
+            base += `[ВАЖНО] Отвечай ТОЛЬКО на ${langMap[c.lang] || 'Русском'} языке. Не используй другие языки. `;
+            
+            // Специфичные инструкции для английского
+            if (c.lang === 'en') {
+                base += 'You MUST respond in English only. Do not use Russian or any other language. ';
+            }
 
             if (c.pattern === 'trade') {
                 const items = c.items.split(',').map(s=>s.trim());
@@ -465,6 +485,7 @@
             const items = Object.entries(S.inventory);
             if (items.length) base += ' Инвентарь: ' + items.map(([n,c]) => `${n}x${c}`).join(', ');
             if (S.balance) base += ' Монет: ' + S.balance;
+            
             return base;
         }
 
@@ -561,7 +582,23 @@
                     addLog('Ollama ошибка: ' + e.message, 'error');
                 }
             }
-
+            // Gradio
+            if (!reply && mv.startsWith('gradio:')) {
+                try {
+                    const gURL = S.gradioUrl || localStorage.getItem('gradio_url') || '';
+                    if (!gURL) throw new Error('Введи Gradio URL в настройках');
+                    
+                    const r = await fetch(gURL + '/api/chat', {
+                        method: 'POST',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ message: msg }),
+                    });
+                    const d = await r.json();
+                    if (d.response) { reply = d.response; S.provider = 'gradio'; }
+                    else if (d.data?.[0]) { reply = d.data[0]; S.provider = 'gradio'; }
+                    else throw new Error('Нет ответа');
+                } catch (e) { addSysMsg('Gradio: ' + e.message, 'error'); }
+            }
             // 2. Groq
             if (!reply && S.groqKey && mv.startsWith('groq:')) {
                 try {
@@ -626,9 +663,13 @@
             S.groqKey = localStorage.getItem('groq_key') || '';
             S.orKey = localStorage.getItem('or_key') || '';
             S.ollamaUrl = localStorage.getItem('ollama_url') || '';
+            S.gradioUrl = localStorage.getItem('gradio_url') || '';
+
             $('groqKey').value = S.groqKey;
             $('orKey').value = S.orKey;
             $('ollamaUrl').value = S.ollamaUrl;
+            $('gradioUrl').value = S.gradioUrl;
+
             $('themeSelect').value = S.theme || 'theme-dark';
             document.body.className = S.theme || 'theme-dark';
             loadChars();
@@ -660,9 +701,13 @@
             const gk = $('groqKey').value.trim();
             const ok = $('orKey').value.trim();
             const ou = $('ollamaUrl').value.trim();
+            const gu = $('gradioUrl').value.trim();
+
             if (gk) { localStorage.setItem('groq_key', gk); S.groqKey = gk; }
             if (ok) { localStorage.setItem('or_key', ok); S.orKey = ok; }
             if (ou) { localStorage.setItem('ollama_url', ou); S.ollamaUrl = ou; }
+            if (gu) { localStorage.setItem('gradio_url', gu); S.gradioUrl = gu; }
+
             $('apiStatus').textContent = '✅';
             $('apiStatus').className = 'status ok';
         });
